@@ -1,0 +1,88 @@
+name: CI
+
+# Type-check, test and build on every push/PR to main.
+# Image push + deploy steps would be added per environment.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (lint + test + build)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: idp
+          POSTGRES_PASSWORD: idp_test
+          POSTGRES_DB: idp_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U idp"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+
+    defaults:
+      run: { working-directory: backend }
+
+    env:
+      DATABASE_URL: postgresql://idp:idp_test@localhost:5432/idp_test?schema=public
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_ACCESS_SECRET: ci-access-secret-must-be-at-least-32-characters-long-okay
+      JWT_REFRESH_SECRET: ci-refresh-secret-must-be-at-least-32-characters-long-okay
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npm test -- --ci --reporters=default
+
+      - name: Build
+        run: npm run build
+
+  frontend:
+    name: Frontend (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: frontend }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:3001/api/v1

@@ -1,0 +1,137 @@
+// Multi-tenancy: shared database, shared schema, with a tenantId FK on every
+// tenant-scoped table. Filtering is applied at the Prisma client level (see
+// src/prisma/prisma.service.ts). Trade-offs are in docs/architecture.md.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique // human-readable identifier (e.g. "acme-corp")
+  status    TenantStatus @default(ACTIVE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  apiKeys   ApiKey[]
+  documents Document[]
+
+  @@index([slug])
+  @@map("tenants")
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String
+  passwordHash String
+  fullName     String?
+  role         UserRole @default(MEMBER)
+  status       UserStatus @default(ACTIVE)
+
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  uploadedDocuments Document[] @relation("UploadedBy")
+  createdApiKeys    ApiKey[]   @relation("CreatedBy")
+
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Email is unique per tenant, not globally — different tenants can have
+  // a user with the same email (e.g. user@gmail.com).
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+enum UserRole {
+  OWNER    // can manage tenant + billing
+  ADMIN    // can manage users + api keys
+  MEMBER   // can upload + view own documents
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+// Machine-to-machine auth. Plaintext key is shown once on creation; we only
+// keep a bcrypt hash. Format: idp_<env>_<random32>.
+model ApiKey {
+  id         String   @id @default(uuid())
+  name       String   // human label, e.g. "Production webhook"
+  keyHash    String   // bcrypt hash of the plaintext key
+  keyPrefix  String   // first 12 chars, shown to user for identification
+  scopes     String[] @default([]) // e.g. ["documents:read", "documents:write"]
+
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User     @relation("CreatedBy", fields: [createdById], references: [id])
+
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([keyPrefix])
+  @@map("api_keys")
+}
+
+model Document {
+  id            String   @id @default(uuid())
+
+  // File metadata
+  originalName  String
+  storagePath   String   // relative path within the storage backend
+  mimeType      String
+  sizeBytes     Int
+  checksumSha256 String?
+
+  // Processing state machine
+  status        DocumentStatus @default(PENDING)
+  errorMessage  String?
+  retryCount    Int      @default(0)
+
+  // OCR output
+  extractedData Json?
+
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedById  String
+  uploadedBy    User     @relation("UploadedBy", fields: [uploadedById], references: [id])
+
+  createdAt     DateTime @default(now())
+  processingStartedAt DateTime?
+  processedAt   DateTime?
+
+  // covers the dashboard list (by recency) and the status filter
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@map("documents")
+}
+
+enum DocumentStatus {
+  PENDING       // queued, not yet picked up
+  PROCESSING    // worker has claimed it
+  COMPLETED     // extraction finished, data available
+  FAILED        // exhausted retries; manual intervention needed
+}
