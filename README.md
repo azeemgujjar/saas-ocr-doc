@@ -11,7 +11,7 @@ Stack:
 - **OCR:** Tesseract, running as its own microservice
 - **Infra:** Docker Compose (postgres, redis, ocr, api, worker, frontend)
 
-The full architecture write-up for Part 1 is in [docs/architecture.md](docs/architecture.md).
+The full architecture write-up for Part 1 is in [docs/System Architecture (engineering detail).pdf](docs/System Architecture (engineering detail).pdf).
 
 ## Quick start
 
@@ -110,8 +110,7 @@ frontend/
 ocr/
   server.js           Express wrapper around the Tesseract CLI
 docs/
-  architecture.md          the architecture write-up
-  architecture-diagram.md. the architecture diagram write-up
+  System Architecture (engineering detail).pdf          the architecture write-up
 docker-compose.yml
 ```
 
